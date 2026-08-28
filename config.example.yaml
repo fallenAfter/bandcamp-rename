@@ -1,0 +1,38 @@
+# Example configuration for bandcamp-rename
+# Copy to ~/.config/bandcamp-rename/config.yaml or pass via --config
+
+# Plex music library root (optional default target for scan/fix)
+# root: /mnt/plex/Music
+
+# Audio file extensions to process
+audio_extensions:
+  - .flac
+  - .mp3
+  - .m4a
+  - .ogg
+  - .wav
+
+# Album artist name used for compilation albums
+compilation_album_artist: "Various Artists"
+
+# Track filename templates (Python format strings)
+# Available fields: track, title, disc, ext
+track_filename_template: "{track:02d} - {title}"
+multi_disc_filename_template: "{disc}{track:02d} - {title}"
+
+# Files to skip during audio discovery (cover art, junk)
+skip_files:
+  - cover.jpg
+  - folder.jpg
+  - .DS_Store
+
+# Update embedded tags after moving/renaming files
+update_tags_after_move: true
+
+# Use track artist as album artist when albumartist tag is missing
+treat_missing_albumartist_as_artist: true
+
+# Bandcamp ZIP handling
+auto_unpack_zips: false
+delete_zip_after_unpack: false
+move_cover_art: true
