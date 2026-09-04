@@ -68,8 +68,14 @@ def version() -> None:
     required=False,
     type=click.Path(exists=True, file_okay=False, path_type=Path),
 )
+@click.option(
+    "--limit",
+    type=int,
+    default=None,
+    help="Process at most N audio files (useful for testing).",
+)
 @click.pass_context
-def scan(ctx: click.Context, path: Path | None) -> None:
+def scan(ctx: click.Context, path: Path | None, limit: int | None) -> None:
     """Report files that are not Plex-compliant."""
     config = ctx.obj["config"]
     verbose = ctx.obj["verbose"]
@@ -83,6 +89,8 @@ def scan(ctx: click.Context, path: Path | None) -> None:
         skip_names=config.skip_files,
     )
     tracks = read_tracks(result.audio_files)
+    if limit is not None:
+        tracks = tracks[:limit]
     rules = config.to_plex_rules()
 
     issue_count = 0
@@ -163,6 +171,12 @@ def unpack(ctx: click.Context, path: Path | None) -> None:
     default=None,
     help="Write a JSON audit log of applied changes.",
 )
+@click.option(
+    "--limit",
+    type=int,
+    default=None,
+    help="Process at most N audio files (useful for testing).",
+)
 @click.pass_context
 def fix_cmd(
     ctx: click.Context,
@@ -170,6 +184,7 @@ def fix_cmd(
     dry_run: bool,
     do_unpack: bool | None,
     backup_log: Path | None,
+    limit: int | None,
 ) -> None:
     """Rename/move files in place to match Plex conventions."""
     config = ctx.obj["config"]
@@ -194,6 +209,8 @@ def fix_cmd(
         skip_names=config.skip_files,
     )
     tracks = read_tracks(result.audio_files)
+    if limit is not None:
+        tracks = tracks[:limit]
     plan = build_plan(
         tracks,
         target,
