@@ -8,11 +8,12 @@ import click
 
 from bandcamp_rename import __version__
 from bandcamp_rename.bandcamp import extract_zip, is_bandcamp_zip
+from bandcamp_rename.config import load_config, merge_cli_overrides
 from bandcamp_rename.executor import apply_plan
 from bandcamp_rename.metadata import read_tracks
 from bandcamp_rename.planner import ActionType, build_plan
 from bandcamp_rename.plex_rules import check_compliance
-from bandcamp_rename.scanner import DEFAULT_AUDIO_EXTENSIONS, scan_directory
+from bandcamp_rename.scanner import scan_directory
 
 
 def _parse_extensions(value: str | None) -> frozenset[str] | None:
@@ -29,16 +30,30 @@ def _parse_extensions(value: str | None) -> frozenset[str] | None:
 @click.version_option(__version__, prog_name="bandcamp-rename")
 @click.option("--verbose", "-v", is_flag=True, help="Show detailed progress.")
 @click.option(
+    "--config",
+    "config_path",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    default=None,
+    help="Path to config.yaml (default: ~/.config/bandcamp-rename/config.yaml).",
+)
+@click.option(
     "--extensions",
     default=None,
-    help="Comma-separated audio extensions (default: flac,mp3,m4a,ogg,wav).",
+    help="Comma-separated audio extensions (overrides config).",
 )
 @click.pass_context
-def main(ctx: click.Context, verbose: bool, extensions: str | None) -> None:
+def main(
+    ctx: click.Context,
+    verbose: bool,
+    config_path: Path | None,
+    extensions: str | None,
+) -> None:
     """Organize music files into Plex-compatible folder structure."""
     ctx.ensure_object(dict)
+    config = load_config(config_path)
+    config = merge_cli_overrides(config, extensions=_parse_extensions(extensions))
     ctx.obj["verbose"] = verbose
-    ctx.obj["extensions"] = _parse_extensions(extensions) or DEFAULT_AUDIO_EXTENSIONS
+    ctx.obj["config"] = config
 
 
 @main.command()
@@ -48,19 +63,32 @@ def version() -> None:
 
 
 @main.command()
-@click.argument("path", type=click.Path(exists=True, file_okay=False, path_type=Path))
+@click.argument(
+    "path",
+    required=False,
+    type=click.Path(exists=True, file_okay=False, path_type=Path),
+)
 @click.pass_context
-def scan(ctx: click.Context, path: Path) -> None:
+def scan(ctx: click.Context, path: Path | None) -> None:
     """Report files that are not Plex-compliant."""
-    extensions = ctx.obj["extensions"]
+    config = ctx.obj["config"]
     verbose = ctx.obj["verbose"]
-    result = scan_directory(path, extensions=extensions)
+    target = path or config.root
+    if target is None:
+        raise click.UsageError("Provide PATH or set root in config.")
+
+    result = scan_directory(
+        target,
+        extensions=config.audio_extensions,
+        skip_names=config.skip_files,
+    )
     tracks = read_tracks(result.audio_files)
+    rules = config.to_plex_rules()
 
     issue_count = 0
     compliant = 0
     for track in tracks:
-        issues = check_compliance(track, path)
+        issues = check_compliance(track, target, rules)
         if not issues:
             compliant += 1
             if verbose:
@@ -85,28 +113,50 @@ def scan(ctx: click.Context, path: Path) -> None:
 
 
 @main.command()
-@click.argument("path", type=click.Path(exists=True, file_okay=False, path_type=Path))
+@click.argument(
+    "path",
+    required=False,
+    type=click.Path(exists=True, file_okay=False, path_type=Path),
+)
 @click.pass_context
-def unpack(ctx: click.Context, path: Path) -> None:
+def unpack(ctx: click.Context, path: Path | None) -> None:
     """Extract Bandcamp ZIP archives found under PATH."""
+    config = ctx.obj["config"]
     verbose = ctx.obj["verbose"]
-    result = scan_directory(path)
+    target = path or config.root
+    if target is None:
+        raise click.UsageError("Provide PATH or set root in config.")
+
+    result = scan_directory(target, skip_names=config.skip_files)
     extracted = 0
     for zip_path in result.zip_files:
         if not is_bandcamp_zip(zip_path):
             if verbose:
                 click.echo(f"Skipping non-Bandcamp zip: {zip_path}")
             continue
-        target = extract_zip(zip_path)
-        click.echo(f"Extracted {zip_path.name} -> {target}")
+        dest = extract_zip(zip_path)
+        click.echo(f"Extracted {zip_path.name} -> {dest}")
+        if config.delete_zip_after_unpack:
+            zip_path.unlink()
+            if verbose:
+                click.echo(f"Deleted {zip_path}")
         extracted += 1
     click.echo(f"Extracted {extracted} archive(s).")
 
 
 @main.command("fix")
-@click.argument("path", type=click.Path(exists=True, file_okay=False, path_type=Path))
+@click.argument(
+    "path",
+    required=False,
+    type=click.Path(exists=True, file_okay=False, path_type=Path),
+)
 @click.option("--dry-run", is_flag=True, help="Show planned changes without applying them.")
-@click.option("--unpack/--no-unpack", default=False, help="Extract Bandcamp ZIPs first.")
+@click.option(
+    "--unpack/--no-unpack",
+    "do_unpack",
+    default=None,
+    help="Extract Bandcamp ZIPs first (overrides config auto_unpack_zips).",
+)
 @click.option(
     "--backup-log",
     type=click.Path(path_type=Path),
@@ -116,25 +166,40 @@ def unpack(ctx: click.Context, path: Path) -> None:
 @click.pass_context
 def fix_cmd(
     ctx: click.Context,
-    path: Path,
+    path: Path | None,
     dry_run: bool,
-    unpack: bool,
+    do_unpack: bool | None,
     backup_log: Path | None,
 ) -> None:
     """Rename/move files in place to match Plex conventions."""
-    extensions = ctx.obj["extensions"]
+    config = ctx.obj["config"]
     verbose = ctx.obj["verbose"]
+    target = path or config.root
+    if target is None:
+        raise click.UsageError("Provide PATH or set root in config.")
 
-    if unpack:
-        scan_result = scan_directory(path)
+    should_unpack = config.auto_unpack_zips if do_unpack is None else do_unpack
+    if should_unpack:
+        scan_result = scan_directory(target, skip_names=config.skip_files)
         for zip_path in scan_result.zip_files:
             if is_bandcamp_zip(zip_path):
-                target = extract_zip(zip_path)
-                click.echo(f"Extracted {zip_path.name} -> {target}")
+                dest = extract_zip(zip_path)
+                click.echo(f"Extracted {zip_path.name} -> {dest}")
+                if config.delete_zip_after_unpack and not dry_run:
+                    zip_path.unlink()
 
-    result = scan_directory(path, extensions=extensions)
+    result = scan_directory(
+        target,
+        extensions=config.audio_extensions,
+        skip_names=config.skip_files,
+    )
     tracks = read_tracks(result.audio_files)
-    plan = build_plan(tracks, path)
+    plan = build_plan(
+        tracks,
+        target,
+        config.to_plex_rules(),
+        update_tags=config.update_tags_after_move,
+    )
 
     if plan.has_conflicts:
         for conflict in plan.conflicts:
