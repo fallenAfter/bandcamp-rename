@@ -31,12 +31,12 @@ def test_build_plan_move_and_rename(tmp_path: Path) -> None:
     plan = build_plan([track], root, update_tags=False)
 
     assert not plan.has_conflicts
-    assert len(plan.actions) == 1
-    assert plan.actions[0].action_type == ActionType.MOVE
-    assert plan.actions[0].destination == root / "Artist" / "Album" / "01 - Song.flac"
+    moves = [a for a in plan.actions if a.action_type == ActionType.MOVE]
+    assert len(moves) == 1
+    assert moves[0].destination == root / "Artist" / "Album" / "01 - Song.flac"
 
 
-def test_build_plan_detects_destination_conflict(tmp_path: Path) -> None:
+def test_build_plan_suffixes_duplicate_destinations(tmp_path: Path) -> None:
     root = tmp_path / "Music"
     first = root / "a" / "01.flac"
     second = root / "b" / "02.flac"
@@ -49,7 +49,36 @@ def test_build_plan_detects_destination_conflict(tmp_path: Path) -> None:
         _track(second, title="Same", track_number=1),
     ]
     plan = build_plan(tracks, root, update_tags=False)
-    assert plan.has_conflicts
+    assert not plan.has_conflicts
+    destinations = {
+        a.destination.name
+        for a in plan.actions
+        if a.action_type in {ActionType.MOVE, ActionType.RENAME} and a.destination
+    }
+    assert "01 - Same.flac" in destinations
+    assert "01 - Same (2).flac" in destinations
+
+
+def test_build_plan_moves_cover_art(tmp_path: Path) -> None:
+    root = tmp_path / "Music"
+    source_dir = root / "incoming" / "Artist - Album"
+    source_dir.mkdir(parents=True)
+    track_path = source_dir / "song.flac"
+    track_path.write_bytes(b"")
+    cover = source_dir / "cover.jpg"
+    cover.write_bytes(b"img")
+
+    plan = build_plan(
+        [_track(track_path, title="Song", track_number=1)],
+        root,
+        update_tags=False,
+        move_cover_art=True,
+    )
+    companion_actions = [
+        a for a in plan.actions if a.action_type == ActionType.MOVE_COMPANION
+    ]
+    assert len(companion_actions) == 1
+    assert companion_actions[0].destination == root / "Artist" / "Album" / "cover.jpg"
 
 
 def test_apply_plan_moves_files(tmp_path: Path) -> None:
