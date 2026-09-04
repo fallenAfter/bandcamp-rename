@@ -84,11 +84,16 @@ def _write_tags(path: Path, track: TrackInfo) -> None:
 
 def _case_safe_rename(source: Path, destination: Path) -> None:
     """Rename with a temp step when only case changes (APFS/macOS)."""
-    if source.resolve() == destination.resolve() and source.name != destination.name:
-        temp = source.with_name(f".{source.name}.{uuid.uuid4().hex}.tmp")
-        source.rename(temp)
-        temp.rename(destination)
-        return
+    if source.exists() and destination.exists():
+        try:
+            same = source.samefile(destination)
+        except OSError:
+            same = False
+        if same and source.name != destination.name:
+            temp = source.with_name(f".{source.name}.{uuid.uuid4().hex}.tmp")
+            source.rename(temp)
+            temp.rename(destination)
+            return
     source.rename(destination)
 
 
@@ -112,12 +117,23 @@ def apply_plan(
             continue
 
         try:
-            if action.action_type in {ActionType.MOVE, ActionType.RENAME}:
+            if action.action_type in {
+                ActionType.MOVE,
+                ActionType.RENAME,
+                ActionType.MOVE_COMPANION,
+            }:
                 if action.destination is None:
                     raise ValueError("Destination required for move/rename")
                 action.destination.parent.mkdir(parents=True, exist_ok=True)
                 dest_exists = action.destination.exists()
-                same_file = action.destination.resolve() == action.source.resolve()
+                same_file = False
+                if dest_exists:
+                    try:
+                        same_file = action.destination.samefile(action.source)
+                    except OSError:
+                        same_file = (
+                            action.destination.resolve() == action.source.resolve()
+                        )
                 if dest_exists and not same_file:
                     raise FileExistsError(f"Destination exists: {action.destination}")
                 _case_safe_rename(action.source, action.destination)
@@ -126,6 +142,15 @@ def apply_plan(
                     raise ValueError("Track required for tag update")
                 target = action.destination or action.source
                 _write_tags(target, action.track)
+            elif action.action_type == ActionType.CLEANUP_EMPTY_DIR:
+                directory = action.source
+                if directory.is_dir() and not any(directory.iterdir()):
+                    directory.rmdir()
+                    # Also prune empty parents up to, but not including, filesystem root.
+                    parent = directory.parent
+                    while parent != parent.parent and parent.is_dir() and not any(parent.iterdir()):
+                        parent.rmdir()
+                        parent = parent.parent
             else:
                 raise ValueError(f"Unknown action: {action.action_type}")
         except Exception as exc:

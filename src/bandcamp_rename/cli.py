@@ -199,6 +199,8 @@ def fix_cmd(
         target,
         config.to_plex_rules(),
         update_tags=config.update_tags_after_move,
+        move_cover_art=config.move_cover_art,
+        companion_names=config.skip_files,
     )
 
     if plan.has_conflicts:
