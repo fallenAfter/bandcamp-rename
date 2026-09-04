@@ -44,7 +44,7 @@ def default_config_path() -> Path:
 
 
 def _normalize_extensions(values: list[str] | None) -> frozenset[str]:
-    if not values:
+    if values is None:
         return DEFAULT_AUDIO_EXTENSIONS
     normalized = []
     for value in values:
@@ -52,13 +52,36 @@ def _normalize_extensions(values: list[str] | None) -> frozenset[str]:
         if not text:
             continue
         normalized.append(text if text.startswith(".") else f".{text}")
-    return frozenset(normalized) or DEFAULT_AUDIO_EXTENSIONS
+    return frozenset(normalized) if normalized else DEFAULT_AUDIO_EXTENSIONS
 
 
 def _normalize_skip_files(values: list[str] | None) -> frozenset[str]:
-    if not values:
+    if values is None:
         return DEFAULT_SKIP_FILENAMES
     return frozenset(str(v).lower() for v in values)
+
+
+def _coerce_bool(value: object, *, field_name: str) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"true", "yes", "1", "on"}:
+            return True
+        if lowered in {"false", "no", "0", "off"}:
+            return False
+    raise ValueError(f"Config field '{field_name}' must be a boolean, got {value!r}")
+
+
+_BOOL_FIELDS = frozenset(
+    {
+        "update_tags_after_move",
+        "treat_missing_albumartist_as_artist",
+        "auto_unpack_zips",
+        "delete_zip_after_unpack",
+        "move_cover_art",
+    }
+)
 
 
 def load_config(path: Path | None = None) -> AppConfig:
@@ -84,6 +107,9 @@ def load_config(path: Path | None = None) -> AppConfig:
         data["audio_extensions"] = _normalize_extensions(data["audio_extensions"])
     if "skip_files" in data:
         data["skip_files"] = _normalize_skip_files(data["skip_files"])
+    for bool_field in _BOOL_FIELDS:
+        if bool_field in data:
+            data[bool_field] = _coerce_bool(data[bool_field], field_name=bool_field)
 
     return AppConfig(**data)
 

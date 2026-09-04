@@ -33,7 +33,9 @@ def _parse_int(value: object | None) -> int | None:
     text = _first_text(value)
     if not text:
         return None
-    digits = "".join(ch for ch in text if ch.isdigit())
+    # Tags often use "1/12" — take the first component only.
+    primary = text.split("/", 1)[0].strip()
+    digits = "".join(ch for ch in primary if ch.isdigit())
     if not digits:
         return None
     return int(digits)

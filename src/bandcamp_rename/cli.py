@@ -194,14 +194,19 @@ def fix_cmd(
         raise click.UsageError("Provide PATH or set root in config.")
 
     should_unpack = config.auto_unpack_zips if do_unpack is None else do_unpack
-    if should_unpack:
+    if should_unpack and not dry_run:
         scan_result = scan_directory(target, skip_names=config.skip_files)
         for zip_path in scan_result.zip_files:
             if is_bandcamp_zip(zip_path):
                 dest = extract_zip(zip_path)
                 click.echo(f"Extracted {zip_path.name} -> {dest}")
-                if config.delete_zip_after_unpack and not dry_run:
+                if config.delete_zip_after_unpack:
                     zip_path.unlink()
+    elif should_unpack and dry_run:
+        scan_result = scan_directory(target, skip_names=config.skip_files)
+        zip_count = sum(1 for z in scan_result.zip_files if is_bandcamp_zip(z))
+        if zip_count:
+            click.echo(f"Would extract {zip_count} Bandcamp ZIP archive(s).")
 
     result = scan_directory(
         target,

@@ -45,6 +45,7 @@ class PlanResult:
     conflicts: list[str] = field(default_factory=list)
     compliant: list[Path] = field(default_factory=list)
     skipped: list[Path] = field(default_factory=list)
+    root: Path | None = None
 
     @property
     def has_conflicts(self) -> bool:
@@ -59,22 +60,55 @@ def _is_case_only_change(source: Path, destination: Path) -> bool:
     )
 
 
-def _unique_destination(desired: Path, claimed: dict[str, Path]) -> Path:
-    """Return desired path, or a numbered variant if already claimed."""
-    key = str(desired).lower()
-    if key not in claimed:
-        return desired
+def _same_file(left: Path, right: Path) -> bool:
+    try:
+        if left.exists() and right.exists():
+            return left.samefile(right)
+    except OSError:
+        pass
+    return False
 
-    stem = desired.stem
-    suffix = desired.suffix
-    parent = desired.parent
+
+def _path_occupied(
+    candidate: Path,
+    *,
+    claimed: dict[str, Path],
+    vacating: set[Path],
+    own_source: Path | None = None,
+) -> bool:
+    """Return True if *candidate* cannot be used as a destination."""
+    key = str(candidate).lower()
+    if key in claimed and (own_source is None or claimed[key] != own_source):
+        return True
+
+    if not candidate.exists():
+        return False
+
+    if own_source is not None and _same_file(candidate, own_source):
+        return False
+
+    for source in vacating:
+        if _same_file(candidate, source):
+            return False
+
+    return True
+
+
+def _unique_destination(
+    desired: Path,
+    claimed: dict[str, Path],
+    vacating: set[Path],
+    own_source: Path,
+) -> Path:
+    """Return desired path, or a numbered variant if already taken."""
+    candidate = desired
     index = 2
-    while True:
-        candidate = parent / f"{stem} ({index}){suffix}"
-        candidate_key = str(candidate).lower()
-        if candidate_key not in claimed:
-            return candidate
+    while _path_occupied(
+        candidate, claimed=claimed, vacating=vacating, own_source=own_source
+    ):
+        candidate = desired.parent / f"{desired.stem} ({index}){desired.suffix}"
         index += 1
+    return candidate
 
 
 def _companion_files_for_album(source_dir: Path, skip_names: frozenset[str]) -> list[Path]:
@@ -100,10 +134,13 @@ def build_plan(
     """Build an ordered plan of moves/renames for non-compliant tracks."""
     cfg = config or PlexRulesConfig()
     skip_names = companion_names or DEFAULT_SKIP_FILENAMES
-    result = PlanResult()
+    result = PlanResult(root=root)
     destinations: dict[str, Path] = {}
     album_moves: dict[Path, Path] = {}
     source_dirs: set[Path] = set()
+    vacating: set[Path] = {track.path for track in tracks}
+
+    pending: list[tuple[TrackInfo, Path, list]] = []
 
     for track in tracks:
         issues = check_compliance(track, root, cfg)
@@ -119,16 +156,15 @@ def build_plan(
         if track.path.resolve() == desired.resolve() and not _is_case_only_change(
             track.path, desired
         ):
-            result.compliant.append(track.path)
-            continue
+            # Still may need case-fix for parent folders on case-insensitive FS.
+            if track.path.as_posix() == desired.as_posix():
+                result.compliant.append(track.path)
+                continue
 
-        target = _unique_destination(desired, destinations)
-        if target != desired:
-            # Soft conflict: auto-suffix instead of hard-failing the plan.
-            result.conflicts.append(
-                f"Duplicate destination resolved: {desired.name} -> {target.name}"
-            )
+        pending.append((track, desired, issues))
 
+    for track, desired, issues in pending:
+        target = _unique_destination(desired, destinations, vacating, track.path)
         destinations[str(target).lower()] = track.path
         source_dirs.add(track.path.parent)
 
@@ -136,7 +172,7 @@ def build_plan(
             action_type = ActionType.RENAME
         else:
             action_type = ActionType.MOVE
-            album_moves[track.path.parent] = target.parent
+            album_moves.setdefault(track.path.parent, target.parent)
 
         reasons = "; ".join(issue.message for issue in issues)
         if target != desired:
@@ -163,14 +199,29 @@ def build_plan(
                 )
             )
 
+    claimed_companions: dict[str, Path] = {}
     if move_cover_art:
         for source_dir, dest_dir in album_moves.items():
             for companion in _companion_files_for_album(source_dir, skip_names):
+                desired = dest_dir / companion.name
+                key = str(desired).lower()
+                if key in claimed_companions or (
+                    desired.exists()
+                    and not _same_file(desired, companion)
+                    and companion not in vacating
+                ):
+                    # Avoid colliding with another album's cover already at dest.
+                    if desired.exists() and not _same_file(desired, companion):
+                        result.conflicts.append(
+                            f"Companion conflict: {companion} -> {desired} already exists"
+                        )
+                        continue
+                claimed_companions[key] = companion
                 result.actions.append(
                     PlannedAction(
                         action_type=ActionType.MOVE_COMPANION,
                         source=companion,
-                        destination=dest_dir / companion.name,
+                        destination=desired,
                         reason="Move cover art / companion file with album",
                     )
                 )
@@ -186,7 +237,6 @@ def build_plan(
                 )
             )
 
-    # File ops first (deepest sources), then companions, tags, then cleanup.
     file_ops = [
         a
         for a in result.actions
@@ -198,9 +248,5 @@ def build_plan(
         a for a in result.actions if a.action_type == ActionType.CLEANUP_EMPTY_DIR
     ]
     file_ops.sort(key=lambda a: len(a.source.parts), reverse=True)
-    # Duplicate destination messages are informational when auto-resolved.
-    result.conflicts = [
-        c for c in result.conflicts if not c.startswith("Duplicate destination resolved:")
-    ]
     result.actions = file_ops + companions + tags + cleanups
     return result
