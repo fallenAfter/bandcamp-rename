@@ -68,6 +68,14 @@ pytest
 ruff check src tests
 ```
 
+### Manual validation checklist
+
+- [ ] macOS: run `pytest` and `bandcamp-rename fix <copied-album> --dry-run`
+- [ ] Drop a Bandcamp ZIP in an incoming folder and run `fix --unpack --dry-run`
+- [ ] Run `fix --limit 5` on a subset before touching a full library
+- [ ] Ubuntu: install from a git tag, `scan` the Plex music root, then fix one album
+- [ ] Trigger a Plex library scan and confirm the album appears correctly
+
 ## License
 
 MIT
