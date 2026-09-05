@@ -78,7 +78,7 @@ def test_read_track_info_missing_metadata(make_flac) -> None:
     info = read_track_info(path)
 
     assert not info.has_minimum_metadata()
-    assert info.missing_fields() == ["album_artist", "album", "title"]
+    assert info.missing_fields() == ["album_artist", "title"]
 
 
 def test_read_tracks(make_audio) -> None:

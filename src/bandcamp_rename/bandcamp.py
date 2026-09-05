@@ -7,6 +7,8 @@ import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 
+from bandcamp_rename.sanitize import sanitize_name
+
 # Artist - Album - 01 Track Title.ext  OR  Artist - Album - 01 - Track Title.ext
 _BANDCAMP_FILENAME_RE = re.compile(
     r"^(?P<artist>.+?) - (?P<album>.+?) - (?P<track_num>\d{1,2})(?: - )?\s*(?P<title>.+)$",
@@ -36,6 +38,78 @@ def is_bandcamp_zip(path: Path) -> bool:
         return False
     stem = path.stem.strip()
     return " - " in stem and not stem.startswith(".")
+
+
+_FORMAT_SUFFIX_RE = re.compile(
+    r"\s*\[(flac|mp3|mp3-v0|mp3-320|aac|wav|aiff|aiff-16bit|aiff-24bit|alac|vorbis)\]\s*$",
+    re.IGNORECASE,
+)
+
+
+def _strip_format_suffix(name: str) -> str:
+    """Remove Bandcamp download format markers like ' [flac]' from names."""
+    return _FORMAT_SUFFIX_RE.sub("", name).strip()
+
+
+def _directory_has_audio(
+    directory: Path,
+    audio_extensions: frozenset[str],
+) -> bool:
+    for path in directory.rglob("*"):
+        if path.is_file() and path.suffix.lower() in audio_extensions:
+            return True
+    return False
+
+
+def is_orphaned_bandcamp_zip(
+    zip_path: Path,
+    root: Path,
+    *,
+    audio_extensions: frozenset[str] | None = None,
+) -> bool:
+    """Return True when a ZIP is safe to delete after its album was organized.
+
+    Requires that the library already contains audio under Artist/Album derived
+    from the ZIP name, so never-extracted archives are preserved.
+    """
+    if not is_bandcamp_zip(zip_path):
+        return False
+
+    extensions = audio_extensions or frozenset(
+        {".flac", ".mp3", ".m4a", ".ogg", ".wav"}
+    )
+    extract_dir = zip_path.parent / zip_path.stem
+    if extract_dir.is_dir() and _directory_has_audio(extract_dir, extensions):
+        return False
+
+    stem = _strip_format_suffix(zip_path.stem)
+    parsed = parse_bandcamp_folder(stem)
+    if not parsed.artist or not parsed.album:
+        return False
+
+    organized = root / sanitize_name(parsed.artist) / sanitize_name(
+        _strip_format_suffix(parsed.album)
+    )
+    return organized.is_dir() and _directory_has_audio(organized, extensions)
+
+
+def cleanup_orphaned_zips(
+    root: Path,
+    *,
+    dry_run: bool = False,
+    audio_extensions: frozenset[str] | None = None,
+) -> list[Path]:
+    """Remove Bandcamp ZIPs only when matching organized album audio exists."""
+    removed: list[Path] = []
+    for path in sorted(root.rglob("*.zip")):
+        if not is_orphaned_bandcamp_zip(
+            path, root, audio_extensions=audio_extensions
+        ):
+            continue
+        removed.append(path)
+        if not dry_run:
+            path.unlink()
+    return removed
 
 
 def extract_zip(zip_path: Path, *, destination: Path | None = None) -> Path:

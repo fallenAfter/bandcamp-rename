@@ -12,6 +12,7 @@ from bandcamp_rename.plex_rules import (
     PlexRulesConfig,
     check_compliance,
     expected_path,
+    target_album_folder,
 )
 from bandcamp_rename.scanner import DEFAULT_SKIP_FILENAMES
 
@@ -164,6 +165,10 @@ def build_plan(
         pending.append((track, desired, issues))
 
     for track, desired, issues in pending:
+        # Normalize missing album to Singles so tags and paths stay aligned.
+        if not track.album:
+            track.album = target_album_folder(track, cfg)
+
         target = _unique_destination(desired, destinations, vacating, track.path)
         destinations[str(target).lower()] = track.path
         source_dirs.add(track.path.parent)
@@ -172,7 +177,9 @@ def build_plan(
             action_type = ActionType.RENAME
         else:
             action_type = ActionType.MOVE
-            album_moves.setdefault(track.path.parent, target.parent)
+            # Loose root-level tracks are not an "album folder" for companion moves.
+            if track.path.parent.resolve() != root.resolve():
+                album_moves.setdefault(track.path.parent, target.parent)
 
         reasons = "; ".join(issue.message for issue in issues)
         if target != desired:
@@ -227,8 +234,11 @@ def build_plan(
                 )
                 source_dirs.add(source_dir)
 
+    root_resolved = root.resolve()
     if cleanup_empty_dirs:
         for directory in sorted(source_dirs, key=lambda p: len(p.parts), reverse=True):
+            if directory.resolve() == root_resolved:
+                continue
             result.actions.append(
                 PlannedAction(
                     action_type=ActionType.CLEANUP_EMPTY_DIR,

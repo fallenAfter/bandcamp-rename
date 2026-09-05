@@ -37,16 +37,17 @@ class TrackInfo:
         return self.album_artist or self.artist
 
     def has_minimum_metadata(self) -> bool:
-        """Return True when enough metadata exists to organize this track."""
-        return bool(self.effective_album_artist and self.album and self.title)
+        """Return True when enough metadata exists to organize this track.
+
+        Album is optional — missing albums are filed under Singles.
+        """
+        return bool(self.effective_album_artist and self.title)
 
     def missing_fields(self) -> list[str]:
         """Return names of required fields that are still missing."""
         missing: list[str] = []
         if not self.effective_album_artist:
             missing.append("album_artist")
-        if not self.album:
-            missing.append("album")
         if not self.title:
             missing.append("title")
         return missing

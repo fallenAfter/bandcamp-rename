@@ -10,8 +10,8 @@ from bandcamp_rename.models import TrackInfo
 from bandcamp_rename.sanitize import sanitize_filename, sanitize_name
 
 DEFAULT_COMPILATION_ARTIST = "Various Artists"
+DEFAULT_SINGLES_ALBUM = "Singles"
 UNKNOWN_ARTIST = "Unknown Artist"
-UNKNOWN_ALBUM = "Unknown Album"
 UNKNOWN_TITLE = "Unknown Title"
 
 
@@ -40,6 +40,7 @@ class PlexRulesConfig:
     """Tunable Plex naming rules."""
 
     compilation_album_artist: str = DEFAULT_COMPILATION_ARTIST
+    singles_album_name: str = DEFAULT_SINGLES_ALBUM
     track_filename_template: str = "{track:02d} - {title}"
     multi_disc_filename_template: str = "{disc}{track:02d} - {title}"
     treat_missing_albumartist_as_artist: bool = True
@@ -61,11 +62,14 @@ def target_album_artist(track: TrackInfo, config: PlexRulesConfig | None = None)
 
 
 def target_album_folder(track: TrackInfo, config: PlexRulesConfig | None = None) -> str:
-    """Return the sanitized album folder name."""
-    _ = config
+    """Return the sanitized album folder name.
+
+    Tracks with no album metadata are filed under a Singles folder for the artist.
+    """
+    cfg = config or PlexRulesConfig()
     if track.album:
         return sanitize_name(track.album)
-    return UNKNOWN_ALBUM
+    return sanitize_name(cfg.singles_album_name)
 
 
 def target_filename(track: TrackInfo, config: PlexRulesConfig | None = None) -> str:
@@ -73,7 +77,7 @@ def target_filename(track: TrackInfo, config: PlexRulesConfig | None = None) -> 
     cfg = config or PlexRulesConfig()
     title = sanitize_filename(track.title or UNKNOWN_TITLE)
     ext = track.path.suffix.lower() if track.path.suffix else ".mp3"
-    track_num = track.track_number if track.track_number is not None else 0
+    track_num = track.track_number if track.track_number is not None else 1
     disc = track.disc_number
 
     if disc is not None and disc > 1:
