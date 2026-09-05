@@ -47,18 +47,40 @@ def test_root_level_single_is_planned(tmp_path: Path) -> None:
     assert not source.exists()
 
 
-def test_orphaned_zip_detected_when_extract_folder_gone(tmp_path: Path, make_zip) -> None:
-    zip_path = make_zip("Artist - Album.zip", {"track.flac": b"x"})
-    # No extract folder → treated as orphaned leftover after a fix.
-    assert is_orphaned_bandcamp_zip(zip_path) is True
+def test_never_extracted_zip_is_not_orphaned(tmp_path: Path, make_zip) -> None:
+    root = tmp_path / "Music"
+    root.mkdir()
+    zip_path = make_zip("Music/Artist - Album.zip", {"track.flac": b"x"})
+    # ZIP only — no organized album yet — must not delete.
+    assert is_orphaned_bandcamp_zip(zip_path, root) is False
 
-    extract_dir = zip_path.parent / zip_path.stem
+
+def test_orphaned_zip_requires_organized_album(tmp_path: Path, make_zip) -> None:
+    root = tmp_path / "Music"
+    root.mkdir()
+    zip_path = make_zip(
+        "Music/Artist - Album [flac].zip",
+        {"track.flac": b"x"},
+    )
+    assert is_orphaned_bandcamp_zip(zip_path, root) is False
+
+    organized = root / "Artist" / "Album"
+    organized.mkdir(parents=True)
+    (organized / "01 - Song.flac").write_bytes(b"audio")
+    assert is_orphaned_bandcamp_zip(zip_path, root) is True
+
+
+def test_zip_with_extracted_audio_is_not_orphaned(tmp_path: Path, make_zip) -> None:
+    root = tmp_path / "Music"
+    root.mkdir()
+    zip_path = make_zip("Music/Artist - Album.zip", {"track.flac": b"x"})
+    extract_dir = root / "Artist - Album"
     extract_dir.mkdir()
     (extract_dir / "track.flac").write_bytes(b"audio")
-    assert is_orphaned_bandcamp_zip(zip_path) is False
-
-    (extract_dir / "track.flac").unlink()
-    assert is_orphaned_bandcamp_zip(zip_path) is True
+    organized = root / "Artist" / "Album"
+    organized.mkdir(parents=True)
+    (organized / "01 - Song.flac").write_bytes(b"audio")
+    assert is_orphaned_bandcamp_zip(zip_path, root) is False
 
 
 def test_fix_removes_orphaned_zip(tmp_path: Path, make_zip) -> None:
@@ -68,8 +90,9 @@ def test_fix_removes_orphaned_zip(tmp_path: Path, make_zip) -> None:
         "Music/Artist - Album.zip",
         {"track.flac": b"x"},
     )
-    # No extract folder remains — ZIP is orphaned.
-    assert not (root / "Artist - Album").exists()
+    organized = root / "Artist" / "Album"
+    organized.mkdir(parents=True)
+    (organized / "01 - Song.flac").write_bytes(b"audio")
 
     runner = CliRunner()
     result = runner.invoke(main, ["fix", str(root), "--dry-run"])
@@ -83,10 +106,27 @@ def test_fix_removes_orphaned_zip(tmp_path: Path, make_zip) -> None:
     assert not zip_path.exists()
 
 
+def test_fix_keeps_never_extracted_zip(tmp_path: Path, make_zip) -> None:
+    root = tmp_path / "Music"
+    root.mkdir()
+    zip_path = make_zip(
+        "Music/Artist - Album.zip",
+        {"track.flac": b"x"},
+    )
+    runner = CliRunner()
+    result = runner.invoke(main, ["fix", str(root)])
+    assert result.exit_code == 0
+    assert "Removed orphaned zip" not in result.output
+    assert zip_path.exists()
+
+
 def test_cleanup_orphaned_zips_helper(tmp_path: Path, make_zip) -> None:
-    zip_path = make_zip("Artist - Album.zip", {"a.flac": b"x"})
-    extract = zip_path.parent / "Artist - Album"
-    extract.mkdir()
-    removed = cleanup_orphaned_zips(zip_path.parent, dry_run=False)
+    root = tmp_path / "Music"
+    root.mkdir()
+    zip_path = make_zip("Music/Artist - Album.zip", {"a.flac": b"x"})
+    organized = root / "Artist" / "Album"
+    organized.mkdir(parents=True)
+    (organized / "01 - Song.flac").write_bytes(b"x")
+    removed = cleanup_orphaned_zips(root, dry_run=False)
     assert zip_path in removed
     assert not zip_path.exists()
