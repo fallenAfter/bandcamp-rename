@@ -81,13 +81,13 @@ uv run bandcamp-rename fix /path/to/Music/incoming --unpack
 3. Preview:
 
    ```bash
-   bandcamp-rename fix Music/incoming --unpack --dry-run
+   uv run bandcamp-rename fix Music/incoming --unpack --dry-run
    ```
 
 4. Apply:
 
    ```bash
-   bandcamp-rename fix Music/incoming --unpack
+   uv run bandcamp-rename fix Music/incoming --unpack
    ```
 
 5. Trigger a Plex library scan and confirm the album appears under the correct artist.
