@@ -22,6 +22,7 @@ Music/
 
 ## Requirements
 
+- [uv](https://docs.astral.sh/uv/)
 - Python 3.9+ (3.11+ recommended)
 - macOS (development) or Ubuntu (production Plex server)
 
@@ -30,48 +31,47 @@ Music/
 ### macOS (development)
 
 ```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh   # if you don't have uv
 git clone https://github.com/fallenAfter/bandcamp-rename.git
 cd bandcamp-rename
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -e ".[dev]"
+uv sync --extra dev
 ```
 
 ### Ubuntu (Plex server)
 
-Pin to a release tag rather than tracking `main`:
-
 ```bash
-pipx install git+https://github.com/fallenAfter/bandcamp-rename@v0.1.0
-```
-
-Or install from a local checkout:
-
-```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh   # if you don't have uv
 git clone https://github.com/fallenAfter/bandcamp-rename.git
 cd bandcamp-rename
-pip install .
+git checkout v0.1.0   # pin to a release tag when available
+uv sync
+```
+
+Or run without a persistent install via:
+
+```bash
+uvx --from git+https://github.com/fallenAfter/bandcamp-rename@v0.1.0 bandcamp-rename --help
 ```
 
 ## Quick start
 
 ```bash
 # Show help / version
-bandcamp-rename --help
-bandcamp-rename --version
+uv run bandcamp-rename --help
+uv run bandcamp-rename --version
 
 # Report problems without changing anything
-bandcamp-rename scan /path/to/Music
+uv run bandcamp-rename scan /path/to/Music
 
 # Preview fixes
-bandcamp-rename fix /path/to/Music --dry-run
+uv run bandcamp-rename fix /path/to/Music --dry-run
 
 # Apply fixes in place
-bandcamp-rename fix /path/to/Music
+uv run bandcamp-rename fix /path/to/Music
 
 # Unpack Bandcamp ZIPs, then fix
-bandcamp-rename fix /path/to/Music/incoming --unpack --dry-run
-bandcamp-rename fix /path/to/Music/incoming --unpack
+uv run bandcamp-rename fix /path/to/Music/incoming --unpack --dry-run
+uv run bandcamp-rename fix /path/to/Music/incoming --unpack
 ```
 
 ## Bandcamp workflow
@@ -81,13 +81,13 @@ bandcamp-rename fix /path/to/Music/incoming --unpack
 3. Preview:
 
    ```bash
-   bandcamp-rename fix Music/incoming --unpack --dry-run
+   uv run bandcamp-rename fix Music/incoming --unpack --dry-run
    ```
 
 4. Apply:
 
    ```bash
-   bandcamp-rename fix Music/incoming --unpack
+   uv run bandcamp-rename fix Music/incoming --unpack
    ```
 
 5. Trigger a Plex library scan and confirm the album appears under the correct artist.
@@ -183,19 +183,19 @@ Useful flags:
 ## Development
 
 ```bash
-pip install -e ".[dev]"
-pytest
-ruff check src tests
+uv sync --extra dev
+uv run pytest
+uv run ruff check src tests
 ```
 
-CI runs `pytest` and `ruff` on macOS and Ubuntu for Python 3.11 and 3.12.
+CI runs `pytest` and `ruff` on macOS and Ubuntu for Python 3.11 and 3.12 via uv.
 
 ### Manual validation checklist
 
-- [ ] macOS: run `pytest` and `bandcamp-rename fix <copied-album> --dry-run`
+- [ ] macOS: run `uv run pytest` and `uv run bandcamp-rename fix <copied-album> --dry-run`
 - [ ] Drop a Bandcamp ZIP in an incoming folder and run `fix --unpack --dry-run`
 - [ ] Run `fix --limit 5` on a subset before touching a full library
-- [ ] Ubuntu: install from a git tag, `scan` the Plex music root, then fix one album
+- [ ] Ubuntu: `uv sync`, `scan` the Plex music root, then fix one album
 - [ ] Trigger a Plex library scan and confirm the album appears correctly
 
 ## Future ideas
