@@ -38,6 +38,49 @@ def is_bandcamp_zip(path: Path) -> bool:
     return " - " in stem and not stem.startswith(".")
 
 
+def is_orphaned_bandcamp_zip(
+    zip_path: Path,
+    *,
+    audio_extensions: frozenset[str] | None = None,
+) -> bool:
+    """Return True when a Bandcamp ZIP's extract folder is gone or has no audio.
+
+    After a successful fix, extracted album folders are usually emptied/removed
+    while the original ZIP is left behind at the library root.
+    """
+    if not is_bandcamp_zip(zip_path):
+        return False
+
+    extract_dir = zip_path.parent / zip_path.stem
+    if not extract_dir.is_dir():
+        return True
+
+    extensions = audio_extensions or frozenset(
+        {".flac", ".mp3", ".m4a", ".ogg", ".wav"}
+    )
+    for path in extract_dir.rglob("*"):
+        if path.is_file() and path.suffix.lower() in extensions:
+            return False
+    return True
+
+
+def cleanup_orphaned_zips(
+    root: Path,
+    *,
+    dry_run: bool = False,
+    audio_extensions: frozenset[str] | None = None,
+) -> list[Path]:
+    """Remove (or report) Bandcamp ZIPs whose contents are no longer extracted."""
+    removed: list[Path] = []
+    for path in sorted(root.rglob("*.zip")):
+        if not is_orphaned_bandcamp_zip(path, audio_extensions=audio_extensions):
+            continue
+        removed.append(path)
+        if not dry_run:
+            path.unlink()
+    return removed
+
+
 def extract_zip(zip_path: Path, *, destination: Path | None = None) -> Path:
     """Extract a Bandcamp ZIP archive.
 

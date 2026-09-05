@@ -20,6 +20,7 @@ class AppConfig:
         default_factory=lambda: DEFAULT_AUDIO_EXTENSIONS
     )
     compilation_album_artist: str = "Various Artists"
+    singles_album_name: str = "Singles"
     track_filename_template: str = "{track:02d} - {title}"
     multi_disc_filename_template: str = "{disc}{track:02d} - {title}"
     skip_files: frozenset[str] = field(default_factory=lambda: DEFAULT_SKIP_FILENAMES)
@@ -27,11 +28,13 @@ class AppConfig:
     treat_missing_albumartist_as_artist: bool = True
     auto_unpack_zips: bool = False
     delete_zip_after_unpack: bool = False
+    delete_orphaned_zips_after_fix: bool = True
     move_cover_art: bool = True
 
     def to_plex_rules(self) -> PlexRulesConfig:
         return PlexRulesConfig(
             compilation_album_artist=self.compilation_album_artist,
+            singles_album_name=self.singles_album_name,
             track_filename_template=self.track_filename_template,
             multi_disc_filename_template=self.multi_disc_filename_template,
             treat_missing_albumartist_as_artist=self.treat_missing_albumartist_as_artist,
@@ -79,6 +82,7 @@ _BOOL_FIELDS = frozenset(
         "treat_missing_albumartist_as_artist",
         "auto_unpack_zips",
         "delete_zip_after_unpack",
+        "delete_orphaned_zips_after_fix",
         "move_cover_art",
     }
 )

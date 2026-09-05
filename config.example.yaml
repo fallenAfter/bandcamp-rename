@@ -15,6 +15,9 @@ audio_extensions:
 # Album artist name used for compilation albums
 compilation_album_artist: "Various Artists"
 
+# Folder name used when a track has no album metadata (Bandcamp singles, etc.)
+singles_album_name: "Singles"
+
 # Track filename templates (Python format strings)
 # Available fields: track, title, disc, ext
 track_filename_template: "{track:02d} - {title}"
@@ -35,4 +38,6 @@ treat_missing_albumartist_as_artist: true
 # Bandcamp ZIP handling
 auto_unpack_zips: false
 delete_zip_after_unpack: false
+# After fix, remove Bandcamp ZIPs whose extract folders were emptied/removed
+delete_orphaned_zips_after_fix: true
 move_cover_art: true

@@ -7,7 +7,11 @@ from pathlib import Path
 import click
 
 from bandcamp_rename import __version__
-from bandcamp_rename.bandcamp import extract_zip, is_bandcamp_zip
+from bandcamp_rename.bandcamp import (
+    cleanup_orphaned_zips,
+    extract_zip,
+    is_bandcamp_zip,
+)
 from bandcamp_rename.config import load_config, merge_cli_overrides
 from bandcamp_rename.executor import apply_plan
 from bandcamp_rename.metadata import read_tracks
@@ -242,6 +246,16 @@ def fix_cmd(
     if not execution.success:
         click.echo(f"ERROR: {execution.error}", err=True)
         raise SystemExit(1)
+
+    if config.delete_orphaned_zips_after_fix:
+        orphaned = cleanup_orphaned_zips(
+            target,
+            dry_run=dry_run,
+            audio_extensions=config.audio_extensions,
+        )
+        for zip_path in orphaned:
+            prefix = "Would remove orphaned zip" if dry_run else "Removed orphaned zip"
+            click.echo(f"{prefix}: {zip_path}")
 
     mode = "Would fix" if dry_run else "Fixed"
     file_ops = [
