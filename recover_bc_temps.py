@@ -62,22 +62,24 @@ def sniff_extension(path: Path) -> str:
     return ".flac"
 
 
-def read_meta(path: Path) -> tuple[int | None, str | None]:
+def read_meta(path: Path) -> tuple[int | None, int | None, str | None]:
     try:
         audio = MutagenFile(path, easy=True)
     except Exception:
         audio = None
     if audio is not None:
-        return parse_int(audio.get("tracknumber")), first_text(audio.get("title"))
+        return (
+            parse_int(audio.get("tracknumber")),
+            parse_int(audio.get("discnumber")),
+            first_text(audio.get("title")),
+        )
 
     # Mutagen can miss tag-only MP3s when the extension is .tmp.
     try:
         id3 = ID3(path)
     except (ID3NoHeaderError, Exception):
-        return None, None
-    title = first_text(id3.get("TIT2"))
-    track = parse_int(id3.get("TRCK"))
-    return track, title
+        return None, None, None
+    return parse_int(id3.get("TRCK")), parse_int(id3.get("TPOS")), first_text(id3.get("TIT2"))
 
 
 def unique_path(destination: Path) -> Path:
@@ -92,13 +94,22 @@ def unique_path(destination: Path) -> Path:
         index += 1
 
 
+def plex_filename(*, track: int, disc: int | None, title: str, ext: str) -> str:
+    """Match bandcamp_rename.plex_rules default templates."""
+    if disc is not None and disc > 1:
+        stem = f"{disc}{track:02d} - {title}"
+    else:
+        stem = f"{track:02d} - {title}"
+    return f"{stem}{ext}"
+
+
 def recover(root: Path, *, dry_run: bool) -> int:
     temps = sorted(root.rglob(".bc-rename-*.tmp"))
     print(f"Found {len(temps)} temp file(s) under {root}")
     fallback_by_dir: dict[Path, int] = defaultdict(int)
     recovered = 0
     for temp in temps:
-        track_num, title = read_meta(temp)
+        track_num, disc_num, title = read_meta(temp)
         ext = sniff_extension(temp)
 
         if track_num is not None:
@@ -114,10 +125,11 @@ def recover(root: Path, *, dry_run: bool) -> int:
             safe_title = f"Recovered Track {number}"
             print(f"warning: no title tag in {temp}", file=sys.stderr)
 
-        filename = f"{number:02d} - {safe_title}{ext}"
+        filename = plex_filename(track=number, disc=disc_num, title=safe_title, ext=ext)
         destination = unique_path(temp.parent / filename)
         size_mb = temp.stat().st_size / (1024 * 1024)
-        print(f"{'[dry-run] ' if dry_run else ''}{temp.name} ({size_mb:.1f} MiB) -> {destination.name}")
+        prefix = "[dry-run] " if dry_run else ""
+        print(f"{prefix}{temp.name} ({size_mb:.1f} MiB) -> {destination.name}")
         if not dry_run:
             temp.rename(destination)
         recovered += 1
