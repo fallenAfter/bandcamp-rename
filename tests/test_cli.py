@@ -65,6 +65,25 @@ def test_fix_dry_run(tmp_path: Path, make_audio) -> None:
     assert (root / "incoming" / "song.mp3").exists()
 
 
+def test_fix_prints_run_uid(tmp_path: Path, make_audio, isolate_run_backups: Path) -> None:
+    root = tmp_path / "Music"
+    make_audio(
+        "Music/incoming/song.mp3",
+        artist="Artist",
+        albumartist="Artist",
+        album="Album",
+        title="Song",
+        tracknumber="1",
+    )
+    runner = CliRunner()
+    result = runner.invoke(main, ["fix", str(root), "--backup-dir", str(isolate_run_backups)])
+    assert result.exit_code == 0, result.output
+    assert "Run " in result.output
+    assert "Backup journal:" in result.output
+    gz_files = list(isolate_run_backups.glob("*.jsonl.gz"))
+    assert len(gz_files) == 1
+
+
 def test_unpack_extracts_bandcamp_zip(tmp_path: Path, make_zip) -> None:
     zip_path = make_zip(
         "Artist - Album.zip",

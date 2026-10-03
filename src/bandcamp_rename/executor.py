@@ -11,6 +11,7 @@ from pathlib import Path
 from mutagen import File as MutagenFile
 from mutagen.id3 import ID3, TALB, TIT2, TPE1, TPE2, TPOS, TRCK, ID3NoHeaderError
 
+from bandcamp_rename.backup import RunBackup, default_backup_dir
 from bandcamp_rename.models import TrackInfo
 from bandcamp_rename.planner import ActionType, PlannedAction, PlanResult
 
@@ -29,6 +30,10 @@ class ExecutionResult:
     failed: PlannedAction | None = None
     error: str | None = None
     audit_log: Path | None = None
+    run_uid: str | None = None
+    journal_path: Path | None = None
+    restored: bool = False
+    restore_error: str | None = None
 
     @property
     def success(self) -> bool:
@@ -88,8 +93,20 @@ def _write_tags(path: Path, track: TrackInfo) -> None:
         return
 
 
-def _case_safe_rename(source: Path, destination: Path) -> None:
+def _case_safe_rename(
+    source: Path,
+    destination: Path,
+    *,
+    original: Path | None = None,
+    backup: RunBackup | None = None,
+) -> None:
     """Rename a file, using a temp name when only case changes (APFS/macOS)."""
+    original_path = original or source
+
+    def _record(src: Path, dst: Path) -> None:
+        if backup is not None:
+            backup.record_move(original=original_path, source=src, destination=dst)
+
     if source.exists() and destination.exists():
         try:
             same = source.samefile(destination)
@@ -97,11 +114,14 @@ def _case_safe_rename(source: Path, destination: Path) -> None:
             same = False
         if same and source.name != destination.name:
             temp = source.with_name(f".{uuid.uuid4().hex}.tmp")
+            _record(source, temp)
             source.rename(temp)
+            _record(temp, destination)
             temp.rename(destination)
             return
         if same:
             return
+    _record(source, destination)
     source.rename(destination)
 
 
@@ -149,7 +169,13 @@ def _ensure_directory_casing(path: Path) -> None:
             current = match
 
 
-def _move_file(source: Path, destination: Path) -> None:
+def _move_file(
+    source: Path,
+    destination: Path,
+    *,
+    original: Path | None = None,
+    backup: RunBackup | None = None,
+) -> None:
     """Move/rename a file to destination, fixing parent directory casing first."""
     destination.parent.mkdir(parents=True, exist_ok=True)
     _ensure_directory_casing(destination.parent)
@@ -166,11 +192,11 @@ def _move_file(source: Path, destination: Path) -> None:
         except OSError:
             same = False
         if same:
-            _case_safe_rename(source, destination)
+            _case_safe_rename(source, destination, original=original, backup=backup)
             return
         raise FileExistsError(f"Destination exists: {destination}")
 
-    _case_safe_rename(source, destination)
+    _case_safe_rename(source, destination, original=original, backup=backup)
 
 
 def _cleanup_empty_dirs(directory: Path, root: Path | None) -> None:
@@ -199,6 +225,8 @@ def apply_plan(
     *,
     dry_run: bool = False,
     backup_log: Path | None = None,
+    backup_dir: Path | None = None,
+    run_uid: str | None = None,
 ) -> ExecutionResult:
     """Apply planned actions. File moves use a two-phase temp strategy."""
     result = ExecutionResult()
@@ -227,21 +255,36 @@ def apply_plan(
             _record(action)
         return result
 
-    # Phase 1: vacate all sources into unique temps (handles crossed renames).
+    journal_dir = backup_dir if backup_dir is not None else default_backup_dir()
+    backup = RunBackup(directory=journal_dir, uid=run_uid)
+    result.run_uid = backup.uid
+    result.journal_path = backup.path
     temps: list[Path] = []
     try:
+        backup.open()
+        # Phase 1: vacate all sources into unique temps (handles crossed renames).
         for action in file_actions:
             if action.destination is None:
                 raise ValueError("Destination required for move/rename")
             action.destination.parent.mkdir(parents=True, exist_ok=True)
             temp = action.destination.parent / f".bc-rename-{uuid.uuid4().hex}.tmp"
-            _case_safe_rename(action.source, temp)
+            _case_safe_rename(
+                action.source,
+                temp,
+                original=action.source,
+                backup=backup,
+            )
             temps.append(temp)
 
         # Phase 2: move temps to final destinations.
         for action, temp in zip(file_actions, temps):
             assert action.destination is not None
-            _move_file(temp, action.destination)
+            _move_file(
+                temp,
+                action.destination,
+                original=action.source,
+                backup=backup,
+            )
             _record(action)
 
         for action in other_actions:
@@ -255,6 +298,8 @@ def apply_plan(
             else:
                 raise ValueError(f"Unknown action: {action.action_type}")
             _record(action)
+
+        result.journal_path = backup.compress()
     except Exception as exc:
         completed_file_count = sum(
             1 for a in result.completed if a.action_type in _FILE_MOVE_TYPES
@@ -265,13 +310,25 @@ def apply_plan(
             else (other_actions[0] if other_actions else None)
         )
         result.error = str(exc)
-        pending_temps = [
-            str(temp)
-            for index, temp in enumerate(temps)
-            if index >= completed_file_count and temp.exists()
-        ]
-        if pending_temps:
-            result.error = f"{result.error}; temp files remain: {', '.join(pending_temps)}"
+        restore = backup.restore()
+        if restore.success:
+            result.restored = True
+            result.journal_path = backup.path
+        else:
+            result.restore_error = "; ".join(restore.errors)
+            pending_temps = [
+                str(temp)
+                for index, temp in enumerate(temps)
+                if index >= completed_file_count and temp.exists()
+            ]
+            if pending_temps:
+                result.error = (
+                    f"{result.error}; temp files remain: {', '.join(pending_temps)}"
+                )
+            if result.restore_error:
+                result.error = f"{result.error}; restore failed: {result.restore_error}"
+    finally:
+        backup.close()
 
     if backup_log is not None:
         backup_log.parent.mkdir(parents=True, exist_ok=True)

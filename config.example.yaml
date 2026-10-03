@@ -41,3 +41,7 @@ delete_zip_after_unpack: false
 # After fix, remove Bandcamp ZIPs whose extract folders were emptied/removed
 delete_orphaned_zips_after_fix: true
 move_cover_art: true
+
+# Directory for per-run filename journals used to restore names on failure.
+# Default: ~/.local/share/bandcamp-rename/runs
+# backup_dir: ~/.local/share/bandcamp-rename/runs

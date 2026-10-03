@@ -30,6 +30,7 @@ class AppConfig:
     delete_zip_after_unpack: bool = False
     delete_orphaned_zips_after_fix: bool = True
     move_cover_art: bool = True
+    backup_dir: Path | None = None
 
     def to_plex_rules(self) -> PlexRulesConfig:
         return PlexRulesConfig(
@@ -107,6 +108,8 @@ def load_config(path: Path | None = None) -> AppConfig:
 
     if "root" in data and data["root"] is not None:
         data["root"] = Path(str(data["root"])).expanduser()
+    if "backup_dir" in data and data["backup_dir"] is not None:
+        data["backup_dir"] = Path(str(data["backup_dir"])).expanduser()
     if "audio_extensions" in data:
         data["audio_extensions"] = _normalize_extensions(data["audio_extensions"])
     if "skip_files" in data:

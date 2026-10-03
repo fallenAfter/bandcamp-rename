@@ -127,6 +127,13 @@ def test_config_coerces_string_bools(tmp_path: Path) -> None:
     assert config.auto_unpack_zips is True
 
 
+def test_load_config_backup_dir(tmp_path: Path) -> None:
+    path = tmp_path / "config.yaml"
+    path.write_text("backup_dir: /tmp/bandcamp-journals\n")
+    config = load_config(path)
+    assert config.backup_dir == Path("/tmp/bandcamp-journals")
+
+
 def test_case_only_folder_components(tmp_path: Path) -> None:
     root = tmp_path / "Music"
     album = root / "artist" / "album"

@@ -7,6 +7,13 @@ from pathlib import Path
 import click
 
 from bandcamp_rename import __version__
+from bandcamp_rename.backup import (
+    default_backup_dir,
+    generate_run_uid,
+    journal_path_for,
+    resolve_journal_path,
+    restore_journal,
+)
 from bandcamp_rename.bandcamp import (
     cleanup_orphaned_zips,
     extract_zip,
@@ -176,6 +183,12 @@ def unpack(ctx: click.Context, path: Path | None) -> None:
     help="Write a JSON audit log of applied changes.",
 )
 @click.option(
+    "--backup-dir",
+    type=click.Path(file_okay=False, path_type=Path),
+    default=None,
+    help="Directory for per-run filename journals (default: ~/.local/share/bandcamp-rename/runs).",
+)
+@click.option(
     "--limit",
     type=int,
     default=None,
@@ -188,6 +201,7 @@ def fix_cmd(
     dry_run: bool,
     do_unpack: bool | None,
     backup_log: Path | None,
+    backup_dir: Path | None,
     limit: int | None,
 ) -> None:
     """Rename/move files in place to match Plex conventions."""
@@ -242,8 +256,26 @@ def fix_cmd(
         if verbose and action.reason:
             click.echo(f"  reason: {action.reason}")
 
-    execution = apply_plan(plan, dry_run=dry_run, backup_log=backup_log)
+    journal_dir = backup_dir or config.backup_dir or default_backup_dir()
+    run_uid = None if dry_run else generate_run_uid()
+    if run_uid:
+        click.echo(f"Run {run_uid}")
+        click.echo(f"Backup journal: {journal_path_for(run_uid, journal_dir)}")
+    execution = apply_plan(
+        plan,
+        dry_run=dry_run,
+        backup_log=backup_log,
+        backup_dir=None if dry_run else journal_dir,
+        run_uid=run_uid,
+    )
+    if execution.journal_path is not None and execution.journal_path.suffix == ".gz":
+        click.echo(f"Compressed backup journal: {execution.journal_path}")
     if not execution.success:
+        if execution.restored:
+            click.echo(
+                f"Restored original filenames from run {execution.run_uid}",
+                err=True,
+            )
         click.echo(f"ERROR: {execution.error}", err=True)
         raise SystemExit(1)
 
@@ -268,6 +300,44 @@ def fix_cmd(
         f"{len(plan.compliant)} already compliant; "
         f"{len(plan.skipped)} skipped."
     )
+
+
+@main.command()
+@click.argument("target")
+@click.option(
+    "--backup-dir",
+    type=click.Path(file_okay=False, path_type=Path),
+    default=None,
+    help="Directory containing run journals (default: ~/.local/share/bandcamp-rename/runs).",
+)
+@click.option("--dry-run", is_flag=True, help="Show restore plan without moving files.")
+@click.pass_context
+def recover(
+    ctx: click.Context,
+    target: str,
+    backup_dir: Path | None,
+    dry_run: bool,
+) -> None:
+    """Restore original filenames from a run UID or journal file."""
+    config = ctx.obj["config"]
+    journal_dir = backup_dir or config.backup_dir or default_backup_dir()
+    try:
+        journal = resolve_journal_path(target, journal_dir)
+    except FileNotFoundError as exc:
+        click.echo(str(exc), err=True)
+        raise SystemExit(1) from exc
+
+    result = restore_journal(journal, dry_run=dry_run)
+    prefix = "Would restore" if dry_run else "Restored"
+    for current, original in result.restored:
+        click.echo(f"{prefix}: {current} -> {original}")
+    for skipped in result.skipped:
+        click.echo(f"Already at original path: {skipped}")
+    if result.errors:
+        for error in result.errors:
+            click.echo(f"ERROR: {error}", err=True)
+        raise SystemExit(1)
+    click.echo(f"{prefix} {len(result.restored)} file(s) from {journal}.")
 
 
 if __name__ == "__main__":
