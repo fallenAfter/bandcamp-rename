@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -34,6 +35,7 @@ class ExecutionResult:
     journal_path: Path | None = None
     restored: bool = False
     restore_error: str | None = None
+    failed_album: str | None = None
 
     @property
     def success(self) -> bool:
@@ -220,6 +222,125 @@ def _cleanup_empty_dirs(directory: Path, root: Path | None) -> None:
         parent = parent.parent
 
 
+class AlbumRenameError(Exception):
+    """Raised when one album's rename/move batch fails."""
+
+    def __init__(self, album: str, message: str, action: PlannedAction | None = None) -> None:
+        self.album = album
+        self.action = action
+        super().__init__(f"Album rename failed ({album}): {message}")
+
+
+@dataclass
+class _AlbumBatch:
+    key: str
+    file_actions: list[PlannedAction] = field(default_factory=list)
+    other_actions: list[PlannedAction] = field(default_factory=list)
+
+
+def _album_key(action: PlannedAction) -> str:
+    if action.action_type in _FILE_MOVE_TYPES and action.destination is not None:
+        return str(action.destination.parent)
+    target = action.destination or action.source
+    return str(target.parent if action.action_type == ActionType.TAG_UPDATE else target)
+
+
+def group_actions_by_album(plan: PlanResult) -> list[_AlbumBatch]:
+    """Group planned actions so each destination album is applied fully before the next."""
+    file_actions = [a for a in plan.actions if a.action_type in _FILE_MOVE_TYPES]
+    tag_actions = [a for a in plan.actions if a.action_type == ActionType.TAG_UPDATE]
+    cleanups = [a for a in plan.actions if a.action_type == ActionType.CLEANUP_EMPTY_DIR]
+
+    batches: dict[str, _AlbumBatch] = {}
+    order: list[str] = []
+
+    def _ensure(key: str) -> _AlbumBatch:
+        if key not in batches:
+            batches[key] = _AlbumBatch(key=key)
+            order.append(key)
+        return batches[key]
+
+    for action in file_actions:
+        _ensure(_album_key(action)).file_actions.append(action)
+
+    for action in tag_actions:
+        _ensure(_album_key(action)).other_actions.append(action)
+
+    source_to_keys: dict[Path, list[str]] = {}
+    for key, batch in batches.items():
+        for action in batch.file_actions:
+            source_to_keys.setdefault(action.source.parent, []).append(key)
+
+    for cleanup in cleanups:
+        keys = source_to_keys.get(cleanup.source, [])
+        if keys:
+            batches[keys[-1]].other_actions.append(cleanup)
+        else:
+            _ensure(str(cleanup.source)).other_actions.append(cleanup)
+
+    return [batches[key] for key in order]
+
+
+def _apply_other_action(action: PlannedAction, root: Path | None) -> None:
+    if action.action_type == ActionType.TAG_UPDATE:
+        if action.track is None:
+            raise ValueError("Track required for tag update")
+        target = action.destination or action.source
+        _write_tags(target, action.track)
+        return
+    if action.action_type == ActionType.CLEANUP_EMPTY_DIR:
+        _cleanup_empty_dirs(action.source, root)
+        return
+    raise ValueError(f"Unknown action: {action.action_type}")
+
+
+def _apply_album_batch(
+    batch: _AlbumBatch,
+    *,
+    root: Path | None,
+    backup: RunBackup,
+    record: Callable[[PlannedAction], None],
+) -> list[Path]:
+    """Apply one album's file moves (two-phase) then tags/cleanup. Returns temps."""
+    temps: list[Path] = []
+    current: PlannedAction | None = None
+    try:
+        for action in batch.file_actions:
+            current = action
+            if action.destination is None:
+                raise ValueError("Destination required for move/rename")
+            action.destination.parent.mkdir(parents=True, exist_ok=True)
+            temp = action.destination.parent / f".bc-rename-{uuid.uuid4().hex}.tmp"
+            _case_safe_rename(
+                action.source,
+                temp,
+                original=action.source,
+                backup=backup,
+            )
+            temps.append(temp)
+
+        for action, temp in zip(batch.file_actions, temps):
+            current = action
+            assert action.destination is not None
+            _move_file(
+                temp,
+                action.destination,
+                original=action.source,
+                backup=backup,
+            )
+            record(action)
+
+        for action in batch.other_actions:
+            current = action
+            _apply_other_action(action, root)
+            record(action)
+    except AlbumRenameError:
+        raise
+    except Exception as exc:
+        raise AlbumRenameError(batch.key, str(exc), current) from exc
+    return temps
+
+
 def apply_plan(
     plan: PlanResult,
     *,
@@ -228,15 +349,14 @@ def apply_plan(
     backup_dir: Path | None = None,
     run_uid: str | None = None,
 ) -> ExecutionResult:
-    """Apply planned actions. File moves use a two-phase temp strategy."""
+    """Apply planned actions one album at a time using a two-phase temp strategy."""
     result = ExecutionResult()
     if plan.has_conflicts:
         result.error = "; ".join(plan.conflicts)
         return result
 
     audit_entries: list[dict] = []
-    file_actions = [a for a in plan.actions if a.action_type in _FILE_MOVE_TYPES]
-    other_actions = [a for a in plan.actions if a.action_type not in _FILE_MOVE_TYPES]
+    batches = group_actions_by_album(plan)
 
     def _record(action: PlannedAction) -> None:
         result.completed.append(action)
@@ -262,65 +382,29 @@ def apply_plan(
     temps: list[Path] = []
     try:
         backup.open()
-        # Phase 1: vacate all sources into unique temps (handles crossed renames).
-        for action in file_actions:
-            if action.destination is None:
-                raise ValueError("Destination required for move/rename")
-            action.destination.parent.mkdir(parents=True, exist_ok=True)
-            temp = action.destination.parent / f".bc-rename-{uuid.uuid4().hex}.tmp"
-            _case_safe_rename(
-                action.source,
-                temp,
-                original=action.source,
+        for batch in batches:
+            temps = _apply_album_batch(
+                batch,
+                root=plan.root,
                 backup=backup,
+                record=_record,
             )
-            temps.append(temp)
-
-        # Phase 2: move temps to final destinations.
-        for action, temp in zip(file_actions, temps):
-            assert action.destination is not None
-            _move_file(
-                temp,
-                action.destination,
-                original=action.source,
-                backup=backup,
-            )
-            _record(action)
-
-        for action in other_actions:
-            if action.action_type == ActionType.TAG_UPDATE:
-                if action.track is None:
-                    raise ValueError("Track required for tag update")
-                target = action.destination or action.source
-                _write_tags(target, action.track)
-            elif action.action_type == ActionType.CLEANUP_EMPTY_DIR:
-                _cleanup_empty_dirs(action.source, plan.root)
-            else:
-                raise ValueError(f"Unknown action: {action.action_type}")
-            _record(action)
-
+            backup.record_checkpoint(batch.key)
         result.journal_path = backup.compress()
     except Exception as exc:
-        completed_file_count = sum(
-            1 for a in result.completed if a.action_type in _FILE_MOVE_TYPES
-        )
-        result.failed = (
-            file_actions[completed_file_count]
-            if completed_file_count < len(file_actions)
-            else (other_actions[0] if other_actions else None)
-        )
+        failed_action = getattr(exc, "action", None)
+        result.failed = failed_action if isinstance(failed_action, PlannedAction) else None
+        result.failed_album = getattr(exc, "album", None)
         result.error = str(exc)
-        restore = backup.restore()
+        if "stopped before remaining albums" not in result.error:
+            result.error = f"{result.error}; stopped before remaining albums"
+        restore = backup.restore(from_last_checkpoint=True)
         if restore.success:
             result.restored = True
             result.journal_path = backup.path
         else:
             result.restore_error = "; ".join(restore.errors)
-            pending_temps = [
-                str(temp)
-                for index, temp in enumerate(temps)
-                if index >= completed_file_count and temp.exists()
-            ]
+            pending_temps = [str(temp) for temp in temps if temp.exists()]
             if pending_temps:
                 result.error = (
                     f"{result.error}; temp files remain: {', '.join(pending_temps)}"

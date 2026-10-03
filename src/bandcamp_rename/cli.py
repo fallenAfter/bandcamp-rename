@@ -311,12 +311,18 @@ def fix_cmd(
     help="Directory containing run journals (default: ~/.local/share/bandcamp-rename/runs).",
 )
 @click.option("--dry-run", is_flag=True, help="Show restore plan without moving files.")
+@click.option(
+    "--full",
+    is_flag=True,
+    help="Restore every album in the journal, including completed ones.",
+)
 @click.pass_context
 def recover(
     ctx: click.Context,
     target: str,
     backup_dir: Path | None,
     dry_run: bool,
+    full: bool,
 ) -> None:
     """Restore original filenames from a run UID or journal file."""
     config = ctx.obj["config"]
@@ -327,7 +333,11 @@ def recover(
         click.echo(str(exc), err=True)
         raise SystemExit(1) from exc
 
-    result = restore_journal(journal, dry_run=dry_run)
+    result = restore_journal(
+        journal,
+        dry_run=dry_run,
+        from_last_checkpoint=not full,
+    )
     prefix = "Would restore" if dry_run else "Restored"
     for current, original in result.restored:
         click.echo(f"{prefix}: {current} -> {original}")

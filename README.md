@@ -18,6 +18,7 @@ Music/
 - Parse metadata from tags, Bandcamp filenames, and folder names
 - Plan and apply in-place renames/moves with dry-run support
 - Journal original paths before each rename and restore them if a run fails
+- Rename one album at a time and stop immediately if an album fails
 - Move cover art, clean empty folders, and handle case-only renames
 - Configure naming templates via YAML
 
@@ -183,7 +184,8 @@ Useful flags:
 - **Plex looks wrong after rename**: rescan the library; prefer running during low use.
 - **macOS case renames**: the tool uses a two-step rename when only letter case changes.
 - **Don't delete ZIPs early**: keep `delete_zip_after_unpack: false` until you trust a run.
-- **Failed run / stranded temps**: `fix` journals original paths before each rename and restores them on error. If a process is killed, run `bandcamp-rename recover RUN_UID` (the UID is printed at the start of each fix). Successful journals are gzipped under `backup_dir`.
+- **Failed run / stranded temps**: `fix` journals original paths before each rename and restores them on error. If a process is killed, run `bandcamp-rename recover RUN_UID` (the UID is printed at the start of each fix). That restores only the in-progress album; use `--full` to undo completed albums too. Successful journals are gzipped under `backup_dir`.
+- **Album stop-on-error**: albums are renamed one at a time. A failure restores that album's original names and leaves later albums untouched.
 
 ## Development
 
