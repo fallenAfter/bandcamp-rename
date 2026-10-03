@@ -72,6 +72,15 @@ def load_journal_entries(path: Path) -> list[dict[str, Any]]:
     return entries
 
 
+def last_checkpoint_index(entries: list[dict[str, Any]]) -> int:
+    """Return the offset after the last completed-album checkpoint."""
+    index = 0
+    for i, entry in enumerate(entries):
+        if entry.get("type") == "checkpoint":
+            index = i + 1
+    return index
+
+
 def _same_file(left: Path, right: Path) -> bool:
     try:
         if left.exists() and right.exists():
@@ -98,16 +107,21 @@ class RestoreResult:
 def restore_journal(
     path: Path,
     *,
-    after_index: int = 0,
+    after_index: int | None = None,
+    from_last_checkpoint: bool = False,
     dry_run: bool = False,
 ) -> RestoreResult:
     """Move files described in *path* back to their original names.
 
     *after_index* skips records before that offset so a later album can roll
-    back without undoing earlier completed work.
+    back without undoing earlier completed work. When *from_last_checkpoint*
+    is true, restore only the in-progress album after the last checkpoint.
     """
     result = RestoreResult()
-    entries = load_journal_entries(path)[after_index:]
+    entries = load_journal_entries(path)
+    if after_index is None:
+        after_index = last_checkpoint_index(entries) if from_last_checkpoint else 0
+    entries = entries[after_index:]
     last_location: dict[str, str] = {}
     for entry in entries:
         if entry.get("type", "move") != "move":
@@ -216,9 +230,28 @@ class RunBackup:
             }
         )
 
-    def restore(self, *, after_index: int = 0) -> RestoreResult:
+    def record_checkpoint(self, album: str) -> None:
+        """Mark an album as fully completed so later restores skip it."""
+        self._write(
+            {
+                "type": "checkpoint",
+                "album": album,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+        )
+
+    def restore(
+        self,
+        *,
+        after_index: int | None = None,
+        from_last_checkpoint: bool = False,
+    ) -> RestoreResult:
         self.close()
-        return restore_journal(self.path, after_index=after_index)
+        return restore_journal(
+            self.path,
+            after_index=after_index,
+            from_last_checkpoint=from_last_checkpoint,
+        )
 
     def compress(self) -> Path:
         """Gzip the journal after a fully successful run."""
