@@ -17,6 +17,7 @@ Music/
 - Unpack Bandcamp ZIP downloads
 - Parse metadata from tags, Bandcamp filenames, and folder names
 - Plan and apply in-place renames/moves with dry-run support
+- Journal original paths before each rename and restore them if a run fails
 - Move cover art, clean empty folders, and handle case-only renames
 - Configure naming templates via YAML
 
@@ -152,6 +153,7 @@ CLI flags override config values. If `root` is set, `scan` / `fix` / `unpack` ca
 | `auto_unpack_zips` | Unpack during `fix` by default |
 | `delete_zip_after_unpack` | Delete ZIP after successful extract |
 | `move_cover_art` | Move `cover.jpg` into album folder |
+| `backup_dir` | Directory for per-run filename journals |
 
 ## Commands
 
@@ -160,6 +162,7 @@ CLI flags override config values. If `root` is set, `scan` / `fix` / `unpack` ca
 | `scan PATH` | Report non-compliant files (exit 1 if issues found) |
 | `unpack PATH` | Extract Bandcamp ZIP archives |
 | `fix PATH` | Rename/move files to Plex layout |
+| `recover UID_OR_FILE` | Restore original filenames from a run journal |
 | `version` | Print package version |
 
 Useful flags:
@@ -168,6 +171,7 @@ Useful flags:
 - `--unpack` / `--no-unpack` — control ZIP extraction during `fix`
 - `--limit N` — process only the first N audio files
 - `--backup-log FILE` — write a JSON audit trail
+- `--backup-dir DIR` — where per-run filename journals are stored
 - `--verbose` — show reasons and compliant files
 - `--extensions flac,mp3` — override audio extensions
 - `--config FILE` — load an alternate config file
@@ -179,6 +183,7 @@ Useful flags:
 - **Plex looks wrong after rename**: rescan the library; prefer running during low use.
 - **macOS case renames**: the tool uses a two-step rename when only letter case changes.
 - **Don't delete ZIPs early**: keep `delete_zip_after_unpack: false` until you trust a run.
+- **Failed run / stranded temps**: `fix` journals original paths before each rename and restores them on error. If a process is killed, run `bandcamp-rename recover RUN_UID` (the UID is printed at the start of each fix). Successful journals are gzipped under `backup_dir`.
 
 ## Development
 

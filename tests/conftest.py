@@ -91,6 +91,25 @@ def make_flac(tmp_path: Path):
     return _make_flac
 
 
+@pytest.fixture(autouse=True)
+def isolate_run_backups(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Keep per-run journals inside the test tmp dir instead of ~/.local/share."""
+    backup_dir = tmp_path / ".bandcamp-rename-runs"
+    monkeypatch.setattr(
+        "bandcamp_rename.backup.default_backup_dir",
+        lambda: backup_dir,
+    )
+    monkeypatch.setattr(
+        "bandcamp_rename.executor.default_backup_dir",
+        lambda: backup_dir,
+    )
+    monkeypatch.setattr(
+        "bandcamp_rename.cli.default_backup_dir",
+        lambda: backup_dir,
+    )
+    return backup_dir
+
+
 @pytest.fixture
 def make_zip(tmp_path: Path):
     """Factory for creating ZIP archives."""
